@@ -5,6 +5,7 @@ MIT License
 
 # -*- coding: utf-8 -*-
 import sys
+sys.path.append("lib/")  # append library path for relative imports
 import os
 import time
 import argparse
@@ -24,13 +25,10 @@ import imgproc
 import file_utils
 import json
 import zipfile
-import operator
 
 from craft import CRAFT
 
-from collections import OrderedDict, defaultdict
-
-
+from collections import OrderedDict
 def copyStateDict(state_dict):
     if list(state_dict.keys())[0].startswith("module"):
         start_idx = 1
@@ -47,16 +45,15 @@ def str2bool(v):
 
 parser = argparse.ArgumentParser(description='CRAFT Text Detection')
 parser.add_argument('--trained_model', default='craft/craft_mlt_25k.pth', type=str, help='pretrained model')
-parser.add_argument('--text_threshold', default=0.0, type=float, help='text confidence threshold')
+parser.add_argument('--text_threshold', default=0.7, type=float, help='text confidence threshold')
 parser.add_argument('--low_text', default=0.4, type=float, help='text low-bound score')
-parser.add_argument('--link_threshold', default=0.4, type=float, help='link confidence threshold')
+parser.add_argument('--link_threshold', default=1.0, type=float, help='link confidence threshold')
 parser.add_argument('--cuda', default=True, type=str2bool, help='Use cuda for inference')
 parser.add_argument('--canvas_size', default=1280, type=int, help='image size for inference')
-parser.add_argument('--mag_ratio', default=3.0, type=float, help='image magnification ratio')
+parser.add_argument('--mag_ratio', default=1.5, type=float, help='image magnification ratio')
 parser.add_argument('--poly', default=True, action='store_true', help='enable polygon type')
 parser.add_argument('--show_time', default=False, action='store_true', help='show processing time')
 parser.add_argument('--test_folder', default='images/', type=str, help='folder path to input images')
-parser.add_argument('--res_folder', default='result/', type=str, help='folder path to output images')
 parser.add_argument('--refine', default=True, action='store_true', help='enable link refiner')
 parser.add_argument('--refiner_model', default='craft/craft_refiner_CTW1500.pth', type=str, help='pretrained refiner model')
 
@@ -66,7 +63,7 @@ args = parser.parse_args()
 """ For test images in a folder """
 image_list, _, _ = file_utils.get_files(args.test_folder)
 
-result_folder = args.res_folder
+result_folder = './result-0.2/'
 if not os.path.isdir(result_folder):
     os.mkdir(result_folder)
 
@@ -83,7 +80,6 @@ def test_net(net, image, text_threshold, link_threshold, low_text, cuda, poly, r
     x = Variable(x.unsqueeze(0))                # [c, h, w] to [b, c, h, w]
     if cuda:
         x = x.cuda()
-        print("Using CUDA")
 
     # forward pass
     y, feature = net(x)
@@ -157,34 +153,18 @@ if __name__ == '__main__':
 
     t = time.time()
 
-    text_threshold =  [0.2] # default 0.7
-    link_threshold =  [0.4] # default 0.4
-    low_text = [0.4] # default 0.4
-
-    nbboxes_dict = defaultdict(int)
     # load data
     for k, image_path in enumerate(image_list):
-        result_folder_ = result_folder
-        for tt in text_threshold:
-            for lt in link_threshold:
-                for lot in low_text:
-                    try:
-                        tag = f"text{str(tt)}-link{str(lt)}-low{str(lot)}"
-                        result_folder = result_folder_ +tag # reset tag
-                        os.makedirs(result_folder, exist_ok=True)
-                        out_path = os.path.join(result_folder, "res_" + os.path.split(image_path)[1])
+        print("Test image {:d}/{:d}: {:s}".format(k+1, len(image_list), image_path), end='\r')
+        image = imgproc.loadImage(image_path)
 
-                        image = imgproc.loadImage(image_path)
-                        bboxes, polys, score_text = test_net(net, image, tt, lt, lot, args.cuda, args.poly, refine_net)
-                        nbboxes_dict[tag] += len(bboxes)
-                        filename, file_ext = os.path.splitext(os.path.basename(image_path))
-                        mask_file = result_folder + "/res_" + filename + '_mask.jpg'
-                        cv2.imwrite(mask_file, score_text)
+        bboxes, polys, score_text = test_net(net, image, args.text_threshold, args.link_threshold, args.low_text, args.cuda, args.poly, refine_net)
 
-                        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder+"/")
-                    except Exception:
-                        print(f"Corrupt Image: {image_path}")
-        sorted_dict = sorted(nbboxes_dict.items(), key=operator.itemgetter(1))
-        print(sorted_dict)
+        # save score text
+        filename, file_ext = os.path.splitext(os.path.basename(image_path))
+        mask_file = result_folder + "/res_" + filename + '_mask.jpg'
+        cv2.imwrite(mask_file, score_text)
+
+        file_utils.saveResult(image_path, image[:,:,::-1], polys, dirname=result_folder)
 
     print("elapsed time : {}s".format(time.time() - t))

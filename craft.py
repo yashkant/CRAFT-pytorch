@@ -7,6 +7,7 @@ MIT License
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from lib.model.roi_layers import ROIAlign
 
 from basenet.vgg16_bn import vgg16_bn, init_weights
 
@@ -40,6 +41,11 @@ class CRAFT(nn.Module):
         self.upconv3 = double_conv(256, 128, 64)
         self.upconv4 = double_conv(128, 64, 32)
 
+        self.roialign_s16 = ROIAlign((1, 1),1/16, 0)
+        self.roialign_s8 = ROIAlign((1, 1),1/8, 0)
+        self.roialign_s4 = ROIAlign((1, 1),1/4, 0)
+        self.roialign_s2 = ROIAlign((1, 1),1/2, 0)
+
         num_class = 2
         self.conv_cls = nn.Sequential(
             nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.ReLU(inplace=True),
@@ -56,22 +62,39 @@ class CRAFT(nn.Module):
         init_weights(self.conv_cls.modules())
         
     def forward(self, x):
+        # x: (bs, nc, h, w)
         """ Base network """
         sources = self.basenet(x)
+
+        # shape: [
+        # torch.Size([1, 1024, 48, 80]),
+        # torch.Size([1, 512, 48, 80]),
+        # torch.Size([1, 512, 96, 160]),
+        # torch.Size([1, 256, 192, 320]),
+        # torch.Size([1, 128, 384, 640])
+        # ]
+
+        roialign_out_s16 = self.roialign_s16(sources[0], sources[0].new(size=(12,5)).zero_().unsqueeze(dim=0))
 
         """ U network """
         y = torch.cat([sources[0], sources[1]], dim=1)
         y = self.upconv1(y)
-
         y = F.interpolate(y, size=sources[2].size()[2:], mode='bilinear', align_corners=False)
+
+        roialign_out_s8 = self.roialign_s8(y)
+
         y = torch.cat([y, sources[2]], dim=1)
         y = self.upconv2(y)
-
         y = F.interpolate(y, size=sources[3].size()[2:], mode='bilinear', align_corners=False)
+
+        roialign_out_s4 = self.roialign_s4(y)
+
         y = torch.cat([y, sources[3]], dim=1)
         y = self.upconv3(y)
-
         y = F.interpolate(y, size=sources[4].size()[2:], mode='bilinear', align_corners=False)
+
+        roialign_out_s2 = self.roialign_s2(y)
+
         y = torch.cat([y, sources[4]], dim=1)
         feature = self.upconv4(y)
 
